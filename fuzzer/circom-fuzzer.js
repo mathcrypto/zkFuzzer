@@ -206,9 +206,65 @@ class CircomFuzzer {
             recommendation: 'Check for <-- vs <== usage in your Circom code'
           },
         ];
+      } else {
+        this.log('No under-constrained variables detected');
+
+
+      }
+
+      // Run proof verification test
+
+      const provingKeyPath = path.join(this.outputDir, 'VotingCircuit_final.zkey');
+      const proofPath = path.join(this.outputDir, 'proof.json');
+      const publicSignalsPath = path.join(this.outputDir, 'public.json');
+     
+      
+      // ✅ Ensure all required files exist before proceeding
+      if (!fs.existsSync(provingKeyPath)) {
+          console.error('❌ Proving key missing! Run `make setup` first.');
+          return [{ error: 'proving_key_missing' }];
       }
       
-      this.log('No under-constrained variables detected');
+      if (!fs.existsSync(witCmd)) {
+          console.error('❌ Witness file missing! Run `make witness` first.');
+          return [{ error: 'witness_missing' }];
+      }
+      
+      if (!fs.existsSync(publicSignalsPath)) {
+          console.error('❌ Public signals file missing! Run `make proof` first.');
+          return [{ error: 'public_signals_missing' }];
+      }
+      
+      // ✅ Only generate proof if it doesn't already exist
+      if (!fs.existsSync(proofPath)) {
+          try {
+              console.log('⚡ Using pre-generated proving key and witness to create proof...');
+              execSync(`snarkjs groth16 prove ${provingKeyPath} ${witCmd} ${proofPath} ${publicSignalsPath}`);
+              console.log('✅ Proof generated successfully');
+          } catch (error) {
+              console.error('❌ Error generating proof:', error.message);
+              return [{ error: 'proof_error', details: error.message }];
+          }
+      } else {
+          console.log('✅ Proof already exists, skipping generation.');
+      }
+      
+      // ✅ Attempt proof verification with mutated input
+      try {
+          execSync(`snarkjs groth16 verify ${provingKeyPath} ${mutatedWitCmd} ${proofPath} ${publicSignalsPath}`);
+          console.log('🚨 Proof verified successfully after input mutation: this is a serious issue!');
+          return [
+              {
+                  type: 'under-constrained-variable',
+                  severity: 'high',
+                  description: 'Proof verification succeeded with mutated input!',
+                  recommendation: 'Ensure constraints are properly enforced in your circuit'
+              },
+          ];
+      } catch (error) {
+          console.log('✅ Proof verification failed with mutated input: this is a good sign.');
+      }
+      
       
       // Export R1CS to JSON for analysis
       const r1csJsonPath = path.join(this.outputDir, `${this.circuitName}.r1cs.json`);
