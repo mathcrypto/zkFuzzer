@@ -212,11 +212,17 @@ class CircomFuzzer {
 
       }
 
-      // Run proof verification test
+      // Extract public signals from the witness files
 
+      
+      const publicSignalsPath = path.join(this.outputDir, 'public.json');
+      const mutatedPublicSignalsPath = path.join(this.outputDir, 'mutated-public.json');
+      execSync(`snarkjs wtns export json ${witCmd} ${publicSignalsPath}`);
+      execSync(`snarkjs wtns export json ${mutatedWitCmd} ${mutatedPublicSignalsPath}`);
+
+      // Run proof verification
       const provingKeyPath = path.join(this.outputDir, 'VotingCircuit_final.zkey');
       const proofPath = path.join(this.outputDir, 'proof.json');
-      const publicSignalsPath = path.join(this.outputDir, 'public.json');
      
       
       // ✅ Ensure all required files exist before proceeding
@@ -251,7 +257,7 @@ class CircomFuzzer {
       
       // ✅ Attempt proof verification with mutated input
       try {
-          execSync(`snarkjs groth16 verify ${provingKeyPath} ${mutatedWitCmd} ${proofPath} ${publicSignalsPath}`);
+          execSync(`snarkjs groth16 verify ${provingKeyPath} ${MutatedPublicSignalsPath} ${proofPath}`);
           console.log('🚨 Proof verified successfully after input mutation: this is a serious issue!');
           return [
               {
