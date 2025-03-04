@@ -129,23 +129,89 @@ class CircomFuzzer {
   async testForUnderconstrainedVariables(inputTemplate) {
     this.log('Testing for under-constrained variables...');
     
-    // Generate random inputs based on the input template
-    const validInput = this.generateInput(inputTemplate);
-    
-    // Write these inputs to a JSON file
-    const inputPath = path.join(this.outputDir, 'input.json');
-    fs.writeFileSync(inputPath, JSON.stringify(validInput, null, 2));
-    
     try {
+      // Generate random inputs based on the input template
+      const validInput = this.generateInput(inputTemplate);
+      
+      // Write these inputs to a JSON file
+      const inputPath = path.join(this.outputDir, 'input.json');
+      fs.writeFileSync(inputPath, JSON.stringify(validInput, null, 2));
+  
       // Generate witness using the compiled wasm file
       const wasmPath = path.join('../circuits', `${this.circuitName}.wasm`);
       const witCmd = path.join(this.outputDir, 'witness1.wtns');
+  
+      // Option to use existing witness file
+      const useExistingWitness = true; // Set to false to generate a new witness
+      const existingWitnessPath = path.join('../circuits/witness', 'witness1.wtns');
 
-      
+      try {
+         if (useExistingWitness && fs.existsSync(existingWitnessPath)) {
+         // Use the existing witness file
+         this.log('Using existing witness file...', true);
+         // You might want to copy it to your expected location if needed
+         fs.copyFileSync(existingWitnessPath, witCmd);
+       } else {
+      // Generate a new witness
+      execSync(`snarkjs wtns calculate ${wasmPath} ${inputPath} ${witCmd}`);
       this.log('Witness generated successfully. Analyzing for unconstrained variables...', true);
+     }
+    } catch (error) {
+  console.error('Error with witness:', error.message);
+  return { error: 'witness_error', details: error.message };
+   }
+  
+      // Mutate input values
+      const mutatedInputPath = path.join(this.outputDir, 'mutated-input.json');
+      const useExistingMutatedInput = true;
+      if (useExistingMutatedInput && fs.existsSync(mutatedInputPath)) {
+        this.log('Using existing mutated input file...', true);
+      } else {
+        const mutatedInput = { ...inputTemplate };
+      const keys = Object.keys(mutatedInput);
+      if (keys.length === 0) return [];
+      const randomKey = keys[Math.floor(Math.random() * keys.length)];
+      mutatedInput[randomKey] = this.generateRandomFieldElement();
+  
+      fs.writeFileSync(mutatedInputPath, JSON.stringify(mutatedInput, null, 2));
+      }
+
+      const mutatedWitCmd = path.join(this.outputDir, 'witness2.wtns');
+      const existingMutatedWitnessPath = path.join('../circuits/witness', 'witness2.wtns');
+  
+      try {
+
+        if (useExistingWitness && fs.existsSync(existingMutatedWitnessPath)) {
+          this.log('Using existing mutated witness file...', true);
+          fs.copyFileSync(existingMutatedWitnessPath, mutatedWitCmd);
+        } else {
+        execSync(`snarkjs wtns calculate ${wasmPath} ${mutatedInputPath} ${mutatedWitCmd}`);
+        this.log('Mutated witness generated successfully. Analyzing for unconstrained variables...', true);
+        }
+      } catch (error) {
+        console.error('Error generating mutated witness:', error.message);
+        return [];
+      }
+  
+      // Compare the two witnesses
+      const witness1 = fs.readFileSync(witCmd);
+      const witness2 = fs.readFileSync(mutatedWitCmd);
+  
+      if (witness1.equals(witness2)) {
+        return [
+          {
+            type: 'under-constrained-variable',
+            severity: 'high',
+            description: 'Circuit may have under-constrained variables',
+            recommendation: 'Check for <-- vs <== usage in your Circom code'
+          },
+        ];
+      }
+      
+      this.log('No under-constrained variables detected');
       
       // Export R1CS to JSON for analysis
-      const r1csJsonPath = path.join(this.outputDir, `${this.circuitName}.r1cs`);
+      const r1csJsonPath = path.join(this.outputDir, `${this.circuitName}.r1cs.json`);
       if (!fs.existsSync(r1csJsonPath)) {
         execSync(`snarkjs r1cs export json ${this.outputDir}/${this.circuitName}.r1cs ${r1csJsonPath}`);
       }
@@ -153,46 +219,64 @@ class CircomFuzzer {
       return this.analyzeR1CSConstraints(r1csJsonPath);
     } catch (error) {
       console.error('Error testing for under-constrained variables:', error.message);
-      
-      // This is still a valid test - errors in witness generation 
-      // don't necessarily mean there are no under-constrained variables
       return this.analyzeCircuitStatically();
     }
   }
   
-  /**
-   * Analyze R1CS constraints to find signals that might be unconstrained
-   * This is a simplified implementation - a real analyzer would be more complex
-   */
   analyzeR1CSConstraints(r1csJsonPath) {
     this.log(`Analyzing R1CS constraints from: ${r1csJsonPath}`);
     
     try {
-      // 1. Parse the R1CS JSON file
-      const parser = new R1CSParser({
-        verbose: this.verbose,   
-        strictMode: true
-      });
-
-      // Read and validate the R1CS JSON file
-        const r1csData = parser.parseR1CSJson(r1csJsonPath);
-      // 2. Build a graph of signal dependencies
-      // 3. Check which signals appear in the witness but are never constrained
-      // 4. Identify potential vulnerabilities
+      // Directly read the JSON file
+      const r1csData = JSON.parse(fs.readFileSync(r1csJsonPath, 'utf8'));
       
-      // This is a placeholder implementation
-      return [{
-        type: 'potential-unconstrained-signal',
-        severity: 'high',
-        description: 'Signal may be assigned but not constrained (similar to Tornado Cash MIMC bug)',
-        recommendation: 'Check for <-- vs <== usage in your Circom code'
-      }];
+      // Basic validation
+      if (!r1csData.constraints || !Array.isArray(r1csData.constraints)) {
+        throw new Error('Invalid R1CS JSON structure');
+      }
+      
+      // 2. Build a graph of signal dependencies
+      const signalDependencies = new Map();
+      
+      r1csData.constraints.forEach((constraint, index) => {
+        // Analyze each part of the constraint (l, r, o)
+        ['l', 'r', 'o'].forEach(part => {
+          if (!constraint[part] || !Array.isArray(constraint[part])) {
+            this.log(`Invalid ${part} constraint at index ${index}`, true);
+            return;
+          }
+          
+          constraint[part].forEach(signal => {
+            const signalName = signal.signal;
+            if (!signalDependencies.has(signalName)) {
+              signalDependencies.set(signalName, new Set());
+            }
+            signalDependencies.get(signalName).add(index);
+          });
+        });
+      });
+      
+      // 3. Identify potential unconstrained signals
+      const unconstrainedSignals = [];
+      
+      for (const [signal, constraints] of signalDependencies.entries()) {
+        if (constraints.size === 0) {
+          unconstrainedSignals.push({
+            signal,
+            type: 'potential-unconstrained-signal',
+            severity: 'high',
+            description: 'Signal may be assigned but not constrained',
+            recommendation: 'Check for <-- vs <== usage in your Circom code'
+          });
+        }
+      }
+      
+      return unconstrainedSignals;
     } catch (error) {
       console.error('Error analyzing R1CS constraints:', error.message);
       return [];
     }
   }
-  
   /**
    * Perform static analysis of the circuit file to find potential issues
    */
@@ -393,4 +477,6 @@ class CircomFuzzer {
   }
 }
 
+
 module.exports = CircomFuzzer;
+
