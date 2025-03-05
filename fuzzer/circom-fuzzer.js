@@ -1,8 +1,9 @@
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execSync, exec } = require('child_process');
 const crypto = require('crypto');
 const R1CS = require('./R1CSParser');
+const { error } = require('console');
 
 /**
  * A general-purpose fuzzer for Circom circuits that targets common vulnerabilities
@@ -72,8 +73,37 @@ class CircomFuzzer {
 
     }
 
+// Generate multiple mutated inputs based on the input template
+  generateMutatedInputs(inputTemplate, mutationCount = 10) {
+    this.log(`Generating mutated inputs with improved strategy..`, true);
+    const mutations = [];
+    for (let i = 0; i < mutationCount; i++) {
+      const mutatedInput = JSON.parse(JSON.stringify(inputTemplate));
+      const keys = Object.keys(mutatedInput);
 
- 
+      if (keys.length === 0) {
+        this.log('Empty input template. Skipping mutation.', true);
+        continue;
+      }
+      const fieldsToMutate = Math.min(Math.floor(Math.random() * 3)+1, keys.length);
+
+      for (let j = 0; j < fieldsToMutate; j++) {
+        const randomKey = keys[Math.floor(Math.random() * keys.length)];
+
+        if (Array.isArray(mutatedInput[randomKey])) {
+          const arrayIndex = Math.floor(Math.random() * mutatedInput[randomKey].length);
+          mutatedInput[randomKey][arrayIndex] = this.generateRandomFieldElement();
+          this.log(`Mutated array input ${randomKey}[${arrayIndex}]`, true);
+        } else {
+          mutatedInput[randomKey] = this.generateRandomFieldElement();
+          this.log(`Mutated scalar input ${randomKey}`, true);
+        }
+      }
+      mutations.push(mutatedInput);
+    }
+    this.log(`Generated ${mutations.length} mutated inputs`, true);
+    return mutations;
+  }
   /**
    * Analyze circuit inputs by inspecting the circuit file and compiled artifacts
    */
@@ -120,12 +150,37 @@ class CircomFuzzer {
       return null;
     }
   }
+  generateVotingCircuitValidInput(inputTemplate) {
+    const mutatedInput = JSON.parse(JSON.stringify(inputTemplate));
+    
+    // Decide what to mutate
+    const mutationType = Math.floor(Math.random() * 2);
+    
+    // For testing purposes, we'll try to keep the output valid
+    if (mutationType === 0) {
+      // Just change voteChoice between 0 and 1
+      mutatedInput.voteChoice = mutatedInput.voteChoice === "0" ? "1" : "0";
+      
+      // When we change voteChoice, we need to update voteCommitment
+      // Since we don't have easy access to Poseidon here, we'll skip modifying voteCommitment
+      // and trust that the circuit will tell us it's invalid, which is expected
+    } 
+    else {
+      // Change randomness
+      mutatedInput.randomness = this.generateRandomFieldElement();
+      
+      // Again, would need to update voteCommitment
+    }
+    
+    return mutatedInput;
+  }
 
   /**
    * Test for under-constrained variables by trying to create invalid proofs
    * This method tries to detect the "Assigned but Unconstrained" vulnerability
    * mentioned in the Tornado Cash MIMC hash bug example
    */
+  
   async testForUnderconstrainedVariables(inputTemplate) {
     this.log('Testing for under-constrained variables...');
     
@@ -141,138 +196,107 @@ class CircomFuzzer {
       const wasmPath = path.join('../circuits', `${this.circuitName}.wasm`);
       const witCmd = path.join(this.outputDir, 'witness1.wtns');
   
-      // Option to use existing witness file
-      const useExistingWitness = true; // Set to false to generate a new witness
-      const existingWitnessPath = path.join('../circuits/witness', 'witness1.wtns');
-
       try {
-         if (useExistingWitness && fs.existsSync(existingWitnessPath)) {
-         // Use the existing witness file
-         this.log('Using existing witness file...', true);
-         // You might want to copy it to your expected location if needed
-         fs.copyFileSync(existingWitnessPath, witCmd);
-       } else {
-      // Generate a new witness
-      execSync(`snarkjs wtns calculate ${wasmPath} ${inputPath} ${witCmd}`);
-      this.log('Witness generated successfully. Analyzing for unconstrained variables...', true);
-     }
-    } catch (error) {
-  console.error('Error with witness:', error.message);
-  return { error: 'witness_error', details: error.message };
-   }
-  
-      // Mutate input values
-      const mutatedInputPath = path.join(this.outputDir, 'mutated-input.json');
-      const useExistingMutatedInput = true;
-      if (useExistingMutatedInput && fs.existsSync(mutatedInputPath)) {
-        this.log('Using existing mutated input file...', true);
-      } else {
-        const mutatedInput = { ...inputTemplate };
-      const keys = Object.keys(mutatedInput);
-      if (keys.length === 0) return [];
-      const randomKey = keys[Math.floor(Math.random() * keys.length)];
-      mutatedInput[randomKey] = this.generateRandomFieldElement();
-  
-      fs.writeFileSync(mutatedInputPath, JSON.stringify(mutatedInput, null, 2));
-      }
-
-      const mutatedWitCmd = path.join(this.outputDir, 'witness2.wtns');
-      const existingMutatedWitnessPath = path.join('../circuits/witness', 'witness2.wtns');
-  
-      try {
-
-        if (useExistingWitness && fs.existsSync(existingMutatedWitnessPath)) {
-          this.log('Using existing mutated witness file...', true);
-          fs.copyFileSync(existingMutatedWitnessPath, mutatedWitCmd);
+        if (fs.existsSync(path.join('../circuits/witness', 'witness1.wtns'))) {
+          this.log('Using existing witness file...', true);
+          fs.copyFileSync(path.join('../circuits/witness', 'witness1.wtns'), witCmd);
         } else {
-        execSync(`snarkjs wtns calculate ${wasmPath} ${mutatedInputPath} ${mutatedWitCmd}`);
-        this.log('Mutated witness generated successfully. Analyzing for unconstrained variables...', true);
+          // Generate a new witness
+          this.log('Generating witness for valid input...');
+          execSync(`snarkjs wtns calculate ${wasmPath} ${inputPath} ${witCmd}`);
+          this.log('Witness generated successfully for valid input', true);
+        }
+        this.log('Valid inputs produce a valid witness - this is expected');
+      } catch (error) {
+        console.error('Error with valid witness:', error.message);
+        return [{ error: 'witness_error', details: error.message }];
+      }
+  
+      // Test for nullifier bypass
+      const findings = [];
+      this.log('Testing for nullifier bypass...', true);
+      try {
+        const modifiedInput = JSON.parse(JSON.stringify(validInput));
+        if (modifiedInput.nullifierHash) {
+          const originalHash = modifiedInput.nullifierHash;
+          modifiedInput.nullifierHash = this.generateRandomFieldElement();
+          this.log(`Testing nullifier bypass: changed from ${originalHash} to ${modifiedInput.nullifierHash}`, true);
+          
+          const modifiedInputPath = path.join(this.outputDir, 'nullifier-test-input.json');
+          fs.writeFileSync(modifiedInputPath, JSON.stringify(modifiedInput, null, 2));
+          
+          const modifiedWitPath = path.join(this.outputDir, 'nullifier-test-witness.wtns');
+          try {
+            execSync(`snarkjs wtns calculate ${wasmPath} ${modifiedInputPath} ${modifiedWitPath}`);
+
+            this.log('Circuit accepted an invalid nullifierHash value! This is a potential vulnerability.');
+            
+            findings.push({
+              type: 'under-constrained-variable',
+              severity: 'high',
+              description: 'Circuit accepted an invalid nullifierHash value!',
+              recommendation: 'Ensure nullifierHash is properly constrained in the circuit'
+            });
+          } catch (error) {
+            this.log('Nullifier validation working correctly - circuit rejected invalid nullifierHash');
+          }
+        } else {
+          this.log('No nullifierHash found in input - skipping nullifier bypass test', true);
         }
       } catch (error) {
-        console.error('Error generating mutated witness:', error.message);
-        return [];
+        console.error('Error testing for nullifier bypass:', error.message);
+      }
+      
+      if (findings.length > 0) {
+        return findings;
       }
   
-      // Compare the two witnesses
-      const witness1 = fs.readFileSync(witCmd);
-      const witness2 = fs.readFileSync(mutatedWitCmd);
-  
-      if (witness1.equals(witness2)) {
-        return [
-          {
-            type: 'under-constrained-variable',
-            severity: 'high',
-            description: 'Circuit may have under-constrained variables',
-            recommendation: 'Check for <-- vs <== usage in your Circom code'
-          },
-        ];
-      } else {
-        this.log('No under-constrained variables detected');
-
-
-      }
-
-      // Extract public signals from the witness files
-
+      // Test with mutated inputs
+      this.log('Testing with mutated inputs...');
+      const mutatedInputs = this.generateMutatedInputs(inputTemplate, 3);
+      const mutationFindings = [];
       
-      const publicSignalsPath = path.join(this.outputDir, 'public.json');
-      const mutatedPublicSignalsPath = path.join(this.outputDir, 'mutated-public.json');
-      execSync(`snarkjs wtns export json ${witCmd} ${publicSignalsPath}`);
-      execSync(`snarkjs wtns export json ${mutatedWitCmd} ${mutatedPublicSignalsPath}`);
-
-      // Run proof verification
-      const provingKeyPath = path.join(this.outputDir, 'VotingCircuit_final.zkey');
-      const proofPath = path.join(this.outputDir, 'proof.json');
-     
-      
-      // ✅ Ensure all required files exist before proceeding
-      if (!fs.existsSync(provingKeyPath)) {
-          console.error('❌ Proving key missing! Run `make setup` first.');
-          return [{ error: 'proving_key_missing' }];
-      }
-      
-      if (!fs.existsSync(witCmd)) {
-          console.error('❌ Witness file missing! Run `make witness` first.');
-          return [{ error: 'witness_missing' }];
-      }
-      
-      if (!fs.existsSync(publicSignalsPath)) {
-          console.error('❌ Public signals file missing! Run `make proof` first.');
-          return [{ error: 'public_signals_missing' }];
-      }
-      
-      // ✅ Only generate proof if it doesn't already exist
-      if (!fs.existsSync(proofPath)) {
-          try {
-              console.log('⚡ Using pre-generated proving key and witness to create proof...');
-              execSync(`snarkjs groth16 prove ${provingKeyPath} ${witCmd} ${proofPath} ${publicSignalsPath}`);
-              console.log('✅ Proof generated successfully');
-          } catch (error) {
-              console.error('❌ Error generating proof:', error.message);
-              return [{ error: 'proof_error', details: error.message }];
+      for (let i = 0; i < mutatedInputs.length; i++) {
+        this.log(`Testing mutated input ${i+1} of ${mutatedInputs.length}...`);
+        const mutatedInputPath = path.join(this.outputDir, `mutated-input-${i}.json`);
+        fs.writeFileSync(mutatedInputPath, JSON.stringify(mutatedInputs[i], null, 2));
+        
+        const mutatedWitCmd = path.join(this.outputDir, `witness-mutated-${i}.wtns`);
+        
+        try {
+          execSync(`snarkjs wtns calculate ${wasmPath} ${mutatedInputPath} ${mutatedWitCmd}`);
+          this.log(`Witness generated for mutated input ${i+1}.`, true);
+          
+          // Compare the two witnesses
+          const witness1 = fs.readFileSync(witCmd);
+          const witness2 = fs.readFileSync(mutatedWitCmd);
+          
+          if (witness1.equals(witness2)) {
+            this.log(`Mutation ${i+1} produce identical witness! This indicates unconstrained variables`);
+            mutationFindings.push({
+              type: 'under-constrained-variable',
+              severity: 'high',
+              description: `Mutation ${i+1} produced identical witness to valid input`,
+              recommendation: 'Check for <-- vs <== usage in your Circom code'
+            });
+          } else {
+            this.log(`Mutation ${i+1} produced different witness - this is expected`);
           }
-      } else {
-          console.log('✅ Proof already exists, skipping generation.');
+        } catch (error) {
+          console.error(`Mutation ${i+1} was rejected by the circuit - this is expected for invalid inputs`);
+          this.log(`Reason : ${error.message.split('\n')[0]}`, true);
+
+        }
       }
       
-      // ✅ Attempt proof verification with mutated input
-      try {
-          execSync(`snarkjs groth16 verify ${provingKeyPath} ${MutatedPublicSignalsPath} ${proofPath}`);
-          console.log('🚨 Proof verified successfully after input mutation: this is a serious issue!');
-          return [
-              {
-                  type: 'under-constrained-variable',
-                  severity: 'high',
-                  description: 'Proof verification succeeded with mutated input!',
-                  recommendation: 'Ensure constraints are properly enforced in your circuit'
-              },
-          ];
-      } catch (error) {
-          console.log('✅ Proof verification failed with mutated input: this is a good sign.');
+      if (mutationFindings.length > 0) {
+        return mutationFindings;
       }
-      
-      
-      // Export R1CS to JSON for analysis
+
+      this.log('No under-constrained variables detected');
+      this.log('Running static analysis for additional checks...');
+  
+      // Export R1CS to JSON for static analysis
       const r1csJsonPath = path.join(this.outputDir, `${this.circuitName}.r1cs.json`);
       if (!fs.existsSync(r1csJsonPath)) {
         execSync(`snarkjs r1cs export json ${this.outputDir}/${this.circuitName}.r1cs ${r1csJsonPath}`);
@@ -351,7 +375,7 @@ class CircomFuzzer {
       }
       
       const circuitContent = fs.readFileSync(this.circuitPath, 'utf8');
-      const findings = [];
+      const findings = []; // Changed from moreefindings to findings
       
       // Look for potential under-constrained variables
       // Search for the <-- operator which only assigns but doesn't constrain
