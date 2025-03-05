@@ -1,4 +1,25 @@
-# zkFuzzer
+# zk Circom Fuzzer
+
+CircomFuzzer is a dynamic testing tool specifically designed for Circom circuits used in zero-knowledge proof systems. It employs dynamic analysis techniques to identify security vulnerabilities and correctness issues in ZK circuits.
+
+## Overview
+
+CircomFuzzer uses a combination of mutation-based fuzzing and constraint analysis to detect common vulnerabilities in Circom circuits. It works by:
+
+1. Compiling the target circuit to generate WASM and R1CS artifacts
+2. Generating and mutating circuit inputs to create test cases
+3. Executing the circuit with various inputs and comparing witness outputs
+4. Analyzing R1CS constraints to identify under-constrained variables
+
+
+## Key Differences from Static Analyzers
+
+Unlike static analysis tools like Circomspect, CircomFuzzer:
+
+- Executes the circuit with real inputs to find runtime vulnerabilities
+
+- Verifies the actual behavior of the circuit through witness generation
+
 
 ## Analyzis of Security Vulnerabilities in zkVoting Circuits
 
