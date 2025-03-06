@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync, exec } = require('child_process');
 const crypto = require('crypto');
-const R1CS = require('./R1CSParser');
+//const R1CS = require('./R1CSParser');
 const { error } = require('console');
 
 /**
@@ -182,7 +182,7 @@ class CircomFuzzer {
    */
   
   async testForUnderconstrainedVariables(inputTemplate) {
-    this.log('Testing for under-constrained variables...');
+    
     
     try {
       // Generate random inputs based on the input template
@@ -301,8 +301,10 @@ class CircomFuzzer {
       if (!fs.existsSync(r1csJsonPath)) {
         execSync(`snarkjs r1cs export json ${this.outputDir}/${this.circuitName}.r1cs ${r1csJsonPath}`);
       }
+
+      const basicFindings = this.analyzeR1CSConstraints(r1csJsonPath);
       
-      return this.analyzeR1CSConstraints(r1csJsonPath);
+      return [...basicFindings];
     } catch (error) {
       console.error('Error testing for under-constrained variables:', error.message);
       return this.analyzeCircuitStatically();
@@ -318,51 +320,155 @@ class CircomFuzzer {
       
       // Basic validation
       if (!r1csData.constraints || !Array.isArray(r1csData.constraints)) {
-        throw new Error('Invalid R1CS JSON structure');
+        this.log('Invalid R1CS JSON structure', true);
+        return [];
       }
       
       // 2. Build a graph of signal dependencies
+      const constraintGraph = new Map();
       const signalDependencies = new Map();
       
       r1csData.constraints.forEach((constraint, index) => {
+
+        if (!constraint) {
+          this.log(`Invalid constraint at index ${index}`, true);
+          return;
+        }
+
+        // For each constraint, we'll build a graph of signal dependencies
+        const inputs = new Set();
+        const outputs = new Set();
         // Analyze each part of the constraint (l, r, o)
-        ['l', 'r', 'o'].forEach(part => {
-          if (!constraint[part] || !Array.isArray(constraint[part])) {
-            this.log(`Invalid ${part} constraint at index ${index}`, true);
-            return;
+        ['l', 'r'].forEach(part => {
+          if (!constraint[part] || !Array.isArray(constraint[part])) { 
+            this.log(`Invalid constraint part ${part} at index ${index}`, true);
+            return; 
           }
-          
+          this.log(`  - ${part} inputs:`, this.verbose);
+
           constraint[part].forEach(signal => {
-            const signalName = signal.signal;
-            if (!signalDependencies.has(signalName)) {
-              signalDependencies.set(signalName, new Set());
+            if (!signal || typeof signal !== 'object' || !signal.signal) {
+              this.log(`Invalid signal in constraint part ${part} at index ${index}`, true);
+              return;
+              
             }
-            signalDependencies.get(signalName).add(index);
-          });
+
+            const signalName = signal.signal;
+            inputs.add(signalName);
+            this.log(`    - ${signalName}`, this.verbose);
+
+          // Track dependencies
+          if (!signalDependencies.has(signalName)) {
+            signalDependencies.set(signalName, 0);
+          }
+          signalDependencies.set(signalName, signalDependencies.get(signalName) + 1);
         });
       });
-      
-      // 3. Identify potential unconstrained signals
-      const unconstrainedSignals = [];
-      
-      for (const [signal, constraints] of signalDependencies.entries()) {
-        if (constraints.size === 0) {
-          unconstrainedSignals.push({
-            signal,
+
+      // Add outputs to the graph
+      if (!constraint.o || !Array.isArray(constraint.o)) {
+        this.log(`Invalid constraint output at index ${index}`, true);
+        return;
+      }
+      this.log(`  - Outputs:`, this.verbose);
+      constraint.o.forEach(signal => {
+        if (!signal || typeof signal !== 'object' || !signal.signal) {
+          this.log(`Invalid signal in constraint output at index ${index}`, true);
+          return;
+        }
+
+        const signalName = signal.signal;
+        outputs.add(signalName);
+        this.log(`    - ${signalName}`, this.verbose);
+
+
+        // Track dependencies
+        if (!signalDependencies.has(signalName)) {
+          signalDependencies.set(signalName, 0);
+        }
+        signalDependencies.set(signalName, signalDependencies.get(signalName) + 1);
+      });
+
+      // Add edges to the graph
+      inputs.forEach(input => {
+        if (!constraintGraph.has(input)) {
+          constraintGraph.set(input, new Set());
+        }
+        outputs.forEach(output => {
+          constraintGraph.get(input).add(output);
+        });
+      });
+    });
+      // Identify potential unconstrained signals
+    const findings = [];
+    for (const [signal, outgoingEdges] of constraintGraph.entries()) {
+      if (outgoingEdges.size === 0) {
+        findings.push({
+            type: 'potential-leaf-signal',
+            severity: 'medium',
+            signal: signal,
+            description: `Signal ${signal} doesn't affect any other signals`,
+            recommendation: 'Verify that this signal is properly constrained'
+          });
+        }
+      }
+      const connectedComponents = this.findConnectedComponents(constraintGraph);
+      if (connectedComponents.length > 1) {
+        findings.push({
+          type: 'disconnected-constraint-graph',
+          severity: 'high',
+          description: `Found ${connectedComponents.length} disconnected components`,
+          recommendation: 'Ensure all signals are properly connected in the circuit',
+          components: connectedComponents
+        });
+      }
+
+      for (const [signal, count] of signalDependencies.entries()) {
+        if (count === 1) {
+          findings.push({
             type: 'potential-unconstrained-signal',
             severity: 'high',
-            description: 'Signal may be assigned but not constrained',
-            recommendation: 'Check for <-- vs <== usage in your Circom code'
+            signal: signal,
+            description: `Signal ${signal} is only used once in constraints`,
+            recommendation: 'Verify that this signal is properly constrained'
           });
         }
       }
       
-      return unconstrainedSignals;
+      return findings;
     } catch (error) {
       console.error('Error analyzing R1CS constraints:', error.message);
       return [];
     }
   }
+  // Helper function to find connected components in the graph
+
+  findConnectedComponents(graph) {
+    const visited = new Set();
+    const components = [];
+    for (const node of graph.keys()) {
+      if (!visited.has(node)) {
+        const component = new Set();
+        this.depthFirstSearch(graph, node, visited, component);
+        components.push(Array.from(component));
+        
+      }
+    }
+    return components;
+  }
+
+    // Helper function to perform depth-first search on the constraint graph
+    depthFirstSearch(graph, node, visited, component) {
+      visited.add(node);
+      component.add(node);
+
+      const neighbors = graph.get(node) || new Set();
+      for (const neighbor of neighbors) {
+        if (!visited.has(neighbor)) {
+          this.depthFirstSearch(graph, neighbor, visited, component);
+        }
+      }
+    }
   /**
    * Perform static analysis of the circuit file to find potential issues
    */
@@ -404,7 +510,7 @@ class CircomFuzzer {
    * Looks for the pattern shown in the BigLessThan vulnerability example
    */
   async testForUnsafeReuse() {
-    this.log('Testing for unsafe reuse of subcircuits...');
+    
     
     try {
       if (!fs.existsSync(this.circuitPath)) {
@@ -472,7 +578,7 @@ class CircomFuzzer {
    * These can lead to valid proofs being rejected
    */
   async testForOverconstrainedCircuits() {
-    this.log('Testing for over-constrained circuits...');
+    
     
     // This is a placeholder implementation
     return [];
@@ -510,7 +616,9 @@ class CircomFuzzer {
     
     // Test for under-constrained variables
     try {
+      this.log('Testing for under-constrained variables...');
       const underconstrainedVulns = await this.testForUnderconstrainedVariables(inputTemplate);
+      this.log(`Found ${underconstrainedVulns.length} potential under-constrained variables`, true);
       vulnerabilities.push(...underconstrainedVulns);
     } catch (error) {
       console.error('Error in under-constrained variables test:', error.message);
@@ -518,7 +626,9 @@ class CircomFuzzer {
     
     // Test for unsafe reuse of subcircuits
     try {
+      this.log('Testing for unsafe reuse of subcircuits...');
       const unsafeReuseVulns = await this.testForUnsafeReuse();
+      this.log(`Found ${unsafeReuseVulns.length} potential unsafe reuse of subcircuits`, true);
       vulnerabilities.push(...unsafeReuseVulns);
     } catch (error) {
       console.error('Error in unsafe reuse test:', error.message);
@@ -526,7 +636,9 @@ class CircomFuzzer {
     
     // Test for over-constrained circuits
     try {
+      this.log('Testing for over-constrained circuits...');
       const overconstrainedVulns = await this.testForOverconstrainedCircuits();
+      this.log(`Found ${overconstrainedVulns.length} potential over-constrained circuits`, true);
       vulnerabilities.push(...overconstrainedVulns);
     } catch (error) {
       console.error('Error in over-constrained circuits test:', error.message);
@@ -534,7 +646,9 @@ class CircomFuzzer {
     
     // Test for computational errors
     try {
+      this.log('Testing for computational errors...');
       const computationalErrorVulns = await this.testForComputationalErrors();
+      this.log(`Found ${computationalErrorVulns.length} potential computational errors`, true);
       vulnerabilities.push(...computationalErrorVulns);
     } catch (error) {
       console.error('Error in computational errors test:', error.message);
@@ -545,14 +659,31 @@ class CircomFuzzer {
       this.log('\n Potential vulnerabilities found:');
       vulnerabilities.forEach((vuln, i) => {
         this.log(`\n${i+1}. Type: ${vuln.type}`);
+        this.log(`   Severity: ${vuln.severity}`);
         this.log(`   Description: ${vuln.description}`);
         this.log(`   Recommendation: ${vuln.recommendation}`);
+
+        if (vuln.signal) {
+          this.log(`   Affected signal: ${vuln.signal}`);
+        }
         
         if (vuln.components) {
-          this.log('   Affected components:');
-          vuln.components.forEach(comp => {
-            this.log(`   - ${comp.component} (${comp.type})`);
+          if (vuln.type === 'disconnected-constraint-graph') {
+            this.log('   Affected constraints:');
+            vuln.components.forEach((comp, i) => {
+              this.log(`   ${i+1}. ${comp.length} signals`);
+              if (this.verbose) {
+                this.log(`Sample signals: ${comp.slice(0, 5).join(', ')}${comp.length > 5 ? '...' : ''}`);
+              }
+            });
+          } else {
+            this.log('   Affected components:');
+            vuln.components.forEach(comp => {
+              this.log(`   - ${comp.component} (${comp.type})`);
+
           });
+         
+          }
         }
       });
     } else {
