@@ -22,6 +22,7 @@ template VotingCircuit(treeDepth) {
     merkleProof.authPath <== authPath;
     merkleProof.voterIndex <== voterIndex;
 
+
     // Nullifier check
     nullifierPoseidon.inputs[0] <== merkleRoot;
     nullifierPoseidon.inputs[1] <== authPath[0];
