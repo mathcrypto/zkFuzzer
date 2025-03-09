@@ -12,7 +12,6 @@
   - [Automated Findings](#automated-findings)
   - [Manual Analysis](#manual-analysis)
   - [Connection Between Fuzzing and Manual Analysis](#connection-between-fuzzing-and-manual-analysis)
-- [Key Differences from Static Analyzers](#key-differences-from-static-analyzers)
 
 ## Overview
 
@@ -171,3 +170,15 @@ cd fuzzer
 node nullifier-fuzzer.js
 ```
 ### Connection Between Fuzzing and Manual Analysis
+The fuzzer successfully identified two critical vulnerabilities in the zkVoting circuit:
+
+1. Merkle Root Inconsistency:
+
+- Detected through "disconnected constraint graph" and "unsafe reuse of merkleProof component" findings
+- Correctly identified that two separate Merkle root representations weren't properly constrained to be equal
+
+
+2. Under-constrained Nullifier Calculation:
+
+- Detected through "Signal nullifierHash is only used once in constraints" finding
+- Accurately flagged that the nullifier calculation was insufficient, missing critical inputs like voterIndex
