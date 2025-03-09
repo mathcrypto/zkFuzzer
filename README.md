@@ -73,16 +73,19 @@ For this example, we're using a voting circuit from the ZeroKnowledgeVoting proj
 
 ### Preparing your Circuit
 Before running the fuzzer, you'll need a compiled circuit. You can use the included Makefile to prepare your circuit:
-1. Compile the circuit 
+1. From the fuzzer folder, run this command:
 ```
-make compile
+make all
 ```
 
 This will:
 
+ * Run the trusted setup (pot14.ptau)
  * Create a build directory if it doesn't exist.
  * Compile the Circom circuit to generate R1CS constraints and WASM
- * Place compilation outputs in the build directory.
+ * Generate proving keys (.zkey)
+ * Create a witness file (wtns)
+ * Generate a proof (proof.json)
 
 
 
@@ -96,7 +99,7 @@ For better vulnerability reports with human-readable signal names:
 Generate symbol files:
 ```
 
-circom circuits/VotingCircuit.circom --sym --output build
+circom ../circuits/VotingCircuit.circom --sym --output build
 ```
 
 
