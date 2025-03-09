@@ -1,20 +1,40 @@
 {
   "name": "zkfuzzer",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "description": "A security fuzzing tool for finding vulnerabilities in Circom zero-knowledge circuits",
+  "main": "fuzzer/cli-fuzzer.js",
+  "type": "commonjs",
+  "bin": {
+    "zk-fuzzer": "./fuzzer/cli-fuzzer.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "scripts": {
+    "test": "node fuzzer/nullifier-fuzzer.js",
+    "fuzz": "node fuzzer/cli-fuzzer.js"
+  },
+  "keywords": [
+    "zk",
+    "zero-knowledge",
+    "circom",
+    "security",
+    "fuzzing",
+    "vulnerability",
+    "testing"
+  ],
+  "author": "Your Name <your.email@example.com>",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mathcrypto/zkFuzzer"
+  },
+  "license": "MIT",
   "dependencies": {
     "chai": "^5.2.0",
+    "circom": "^0.5.46",
     "circom_tester": "^0.0.20",
     "circomlib": "^2.0.5",
     "circomlibjs": "^0.1.7",
+    "commander": "^9.5.0",
     "ffjavascript": "^0.3.1",
+    "mocha": "^11.1.0",
     "snarkjs": "^0.7.5"
   }
 }
