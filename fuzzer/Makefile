@@ -6,7 +6,7 @@ CIRCUIT := VotingCircuit
 PTAU_FILE := $(BUILD_DIR)/pot14_final.ptau
 
 # Targets
-all: setup compile witness proof verify
+all: setup compile witness proof 
 
 ## ======= Trusted Setup =======
 $(BUILD_DIR)/pot14_0000.ptau:
