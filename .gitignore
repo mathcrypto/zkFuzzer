@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+build/
+*.wtns
+*.r1cs
+*.sym
+*_js/
+*.zkey
+
+# Environment variables
+.env
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Editor directories and files
+.idea/
+.vscode/
+*.swp
