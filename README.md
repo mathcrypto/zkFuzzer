@@ -29,7 +29,7 @@ CircomFuzzer is a comprehensive security testing tool for Circom circuits that c
 * **Constraint Graph Analysis**: Maps relationships between signals to detect disconnected components.
 * **Signal Usage Analysis**: Identifies signals that appear only once in constraints, suggesting potential vulnerabilities.
 
-## Key Differences from Static Analyzers
+**Key Differences from Static Analyzers** 
 
 Unlike static analysis tools like Circomspect, CircomFuzzer:
 
@@ -60,6 +60,8 @@ npm install
 chmod +x fuzzer/cli-fuzzer.js
 ```
 The CLI fuzzer is a command-line interface tool for security testing zero-knowledge proof circuits written in Circom. It works together with the circom-fuzzer.js module, which provides the core fuzzing functionality.
+
+
 ### About the Example Circuit
 
 For this example, we're using a voting circuit from the ZeroKnowledgeVoting project:
@@ -98,12 +100,24 @@ circom circuits/VotingCircuit.circom --sym --output build
 ```
 
 
-### Testing Your Voting Circuit
+### Testing Your Circuit
 Simply run the fuzzer with:
 ```
 cd fuzzer
 ./cli-fuzzer.js ../circuits/VotingCircuit.circom build/input.json
 ```
+### Using npm Scripts
+
+This project includes several npm scripts to make running the fuzzer more convenient:
+
+```bash
+# Run the main fuzzer (requires circuit path and input file)
+npm run fuzz -- ../circuits/VotingCircuit.circom build/input.json
+
+# Run the specialized nullifier vulnerability test
+npm test
+```
+The ```package.json``` file includes all necessary dependencies for the fuzzer, including circom, snarkjs, and other supporting libraries which are automatically installed during the installation step.
 ## Case Study: Security Vulnerabilities in the zkVoting Circuit
 
 ### Automated Findings
